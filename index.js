@@ -39,13 +39,40 @@ const verifyToken = async (req, res, next) => {
 
   try{
     const {payload} = await jwtVerify(token, JWKS)
-    console.log(payload)
+    req.user = payload
     next()
   }catch(error){
     console.log(error)
     return res.status(401).json({ message: "Unauthorized" });
   }
 }
+
+
+// Verifying User
+const tenantVerify = async(req, res, next) =>{
+  const user = req.user;
+  if(user.role !== 'tenant'){
+    return res.status(403).json({ message: "Forbidden" });
+  }
+  next()
+}
+
+const ownerVerify = async(req, res, next) =>{
+  const user = req.user;
+  if(user.role !== 'owner'){
+    return res.status(403).json({ message: "Forbidden" });
+  }
+  next()
+}
+
+const adminVerify = async(req, res, next) =>{
+  const user = req.user;
+  if(user.role !== 'admin'){
+    return res.status(403).json({ message: "Forbidden" });
+  }
+  next()
+}
+
 
 
 async function run() {
@@ -56,9 +83,9 @@ async function run() {
     const propertiesCollection = db.collection("properties");
 
 
-    
+
     //Owner Add Property
-    app.post('/owner/properties', verifyToken, async(req, res) =>{
+    app.post('/owner/properties', verifyToken, ownerVerify, async(req, res) =>{
       const data = req.body
       const result = await propertiesCollection.insertOne(data)
       res.send(result)
