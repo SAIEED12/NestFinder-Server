@@ -87,10 +87,15 @@ async function run() {
     //Owner Add Property
     app.post('/owner/properties', verifyToken, ownerVerify, async(req, res) =>{
       const data = req.body
-      const result = await propertiesCollection.insertOne(data)
+      const result = await propertiesCollection.insertOne({...data, userId: req.user.id})
       res.send(result)
     })
 
+    //Owner Properties
+    app.get('/owner/properties', async(req, res) =>{
+      const result = await propertiesCollection.find().toArray()
+      res.send(result)
+    })
 
 
 
