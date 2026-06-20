@@ -93,8 +93,12 @@ async function run() {
 
     //Owner Properties
     app.get('/owner/properties', verifyToken, ownerVerify, async(req, res) =>{
-      const result = await propertiesCollection.find({ userId: req.user.id }).toArray()
-      res.send(result)
+      const {page=1, limit=10} = req.query
+      const skip = (Number(page)-1) * Number(limit)
+      const result = await propertiesCollection.find({ userId: req.user.id }).skip(skip).limit(Number(limit)).toArray()
+      const totalData = await propertiesCollection.countDocuments({ userId: req.user.id })
+      const totalPage = Math.ceil(totalData/Number(limit))
+      res.send({data: result, page: Number(page), totalPage })
     })
 
 
