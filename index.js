@@ -92,8 +92,8 @@ async function run() {
     })
 
     //Owner Properties
-    app.get('/owner/properties', async(req, res) =>{
-      const result = await propertiesCollection.find().toArray()
+    app.get('/owner/properties', verifyToken, ownerVerify, async(req, res) =>{
+      const result = await propertiesCollection.find({ userId: req.user.id }).toArray()
       res.send(result)
     })
 
