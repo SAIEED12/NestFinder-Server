@@ -82,16 +82,40 @@ async function run() {
     const db = client.db("nestFinder");
     const propertiesCollection = db.collection("properties");
 
+    //Featured Properties
+    app.get('/api/properties/featured', async (req, res) => {
+    try {
+        const query = { status: 'Approved' }; 
+        
+        const featuredProperties = await db.collection('properties')
+            .find(query)
+            .limit(6) 
+            .toArray();
+
+        res.status(200).send(featuredProperties);
+    } catch (error) {
+        res.status(500).send({ message: "Error loading featured items", error });
+    }
+});
 
 
-    //Owner Add Property
+  //Get All Properties
+  app.get('/all-properities', async(req, res) =>{
+      const query = { status: 'Approved' }; 
+      const cursor = propertiesCollection.find(query)
+      const result = await cursor.toArray()
+      res.send(result)
+  })
+
+
+  //Owner Add Property
     app.post('/owner/properties', verifyToken, ownerVerify, async(req, res) =>{
       const data = req.body
       const result = await propertiesCollection.insertOne({...data, userId: req.user.id})
       res.send(result)
     })
 
-    //Owner Properties
+  //Owner Properties
     app.get('/owner/properties', verifyToken, ownerVerify, async(req, res) =>{
       const {page=1, limit=10} = req.query
       const skip = (Number(page)-1) * Number(limit)
