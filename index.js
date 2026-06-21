@@ -4,15 +4,15 @@ dns.setServers(["8.8.8.8", "8.8.4.4"]);
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const { jwtVerify, createRemoteJWKSet } = require("jose-cjs");
 dotenv.config();
 const app = express();
 app.use(cors());
-app.use(express.json())
+app.use(express.json());
 const port = process.env.PORT || 5000;
 
-const uri =process.env.MONGODB_URI
+const uri = process.env.MONGODB_URI;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -23,57 +23,55 @@ const client = new MongoClient(uri, {
   },
 });
 
-
-const JWKS = createRemoteJWKSet(new URL(`${process.env.CLIENT_URL}/api/auth/jwks`));
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.CLIENT_URL}/api/auth/jwks`),
+);
 
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
-  if(!authHeader || !authHeader.startsWith("Bearer ")) {
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  const token = authHeader.split(" ")[1]
-  if(!token){
+  const token = authHeader.split(" ")[1];
+  if (!token) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  try{
-    const {payload} = await jwtVerify(token, JWKS)
-    req.user = payload
-    next()
-  }catch(error){
-    console.log(error)
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    req.user = payload;
+    next();
+  } catch (error) {
+    console.log(error);
     return res.status(401).json({ message: "Unauthorized" });
   }
-}
-
+};
 
 // Verifying User
-const tenantVerify = async(req, res, next) =>{
+const tenantVerify = async (req, res, next) => {
   const user = req.user;
-  if(user.role !== 'tenant'){
+  if (user.role !== "tenant") {
     return res.status(403).json({ message: "Forbidden" });
   }
-  next()
-}
+  next();
+};
 
-const ownerVerify = async(req, res, next) =>{
+const ownerVerify = async (req, res, next) => {
   const user = req.user;
-  if(user.role !== 'owner'){
+  if (user.role !== "owner") {
     return res.status(403).json({ message: "Forbidden" });
   }
-  next()
-}
+  next();
+};
 
-const adminVerify = async(req, res, next) =>{
+const adminVerify = async (req, res, next) => {
   const user = req.user;
-  if(user.role !== 'admin'){
+  if (user.role !== "admin") {
     return res.status(403).json({ message: "Forbidden" });
   }
-  next()
-}
-
-
+  next();
+};
 
 async function run() {
   try {
@@ -83,50 +81,94 @@ async function run() {
     const propertiesCollection = db.collection("properties");
 
     //Featured Properties
-    app.get('/api/properties/featured', async (req, res) => {
-    try {
-        const query = { status: 'Approved' }; 
-        
-        const featuredProperties = await db.collection('properties')
-            .find(query)
-            .limit(6) 
-            .toArray();
+    app.get("/api/properties/featured", async (req, res) => {
+      try {
+        const query = { status: "Approved" };
+
+        const featuredProperties = await db
+          .collection("properties")
+          .find(query)
+          .limit(6)
+          .toArray();
 
         res.status(200).send(featuredProperties);
-    } catch (error) {
-        res.status(500).send({ message: "Error loading featured items", error });
+      } catch (error) {
+        res
+          .status(500)
+          .send({ message: "Error loading featured items", error });
+      }
+    });
+
+    //Get All Properties
+app.get('/all-properties', async (req, res) => {
+  try {
+    const { search, propertyType, sort } = req.query;
+    const query = {status: 'Approved'};
+
+    if (search && search !== "undefined") {
+      query.location = { $regex: search, $options: 'i' };
     }
+
+    if (propertyType && propertyType !== 'all') {
+      query.propertyType = propertyType.toLowerCase(); 
+    }
+
+    const sortQuery = {};
+    if (sort === 'low-to-high') {
+      sortQuery.rent = 1;  
+    } else if (sort === 'high-to-low') {
+      sortQuery.rent = -1; 
+    }
+
+    const result = await propertiesCollection
+      .find(query)
+      .collation({ locale: "en", numericOrdering: true }) 
+      .sort(sortQuery)
+      .toArray();
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Internal server error" });
+  }
 });
 
 
-  //Get All Properties
-  app.get('/all-properities', async(req, res) =>{
-      const query = { status: 'Approved' }; 
-      const cursor = propertiesCollection.find(query)
-      const result = await cursor.toArray()
-      res.send(result)
-  })
+//Detaails Page
+app.get('/all-properties/:id', async(req, res) =>{
+  const {id} = req.params
+  const result = await propertiesCollection.findOne({_id:new ObjectId(id)})
+  res.send(result)
+})
 
+    //Owner Add Property
+    app.post(
+      "/owner/properties",
+      verifyToken,
+      ownerVerify,
+      async (req, res) => {
+        const data = req.body;
+        const result = await propertiesCollection.insertOne({
+          ...data,
+          userId: req.user.id,
+        });
+        res.send(result);
+      },
+    );
 
-  //Owner Add Property
-    app.post('/owner/properties', verifyToken, ownerVerify, async(req, res) =>{
-      const data = req.body
-      const result = await propertiesCollection.insertOne({...data, userId: req.user.id})
-      res.send(result)
-    })
-
-  //Owner Properties
-    app.get('/owner/properties', verifyToken, ownerVerify, async(req, res) =>{
-      const {page=1, limit=10} = req.query
-      const skip = (Number(page)-1) * Number(limit)
-      const result = await propertiesCollection.find({ userId: req.user.id }).skip(skip).limit(Number(limit)).toArray()
-      const totalData = await propertiesCollection.countDocuments({ userId: req.user.id })
-      const totalPage = Math.ceil(totalData/Number(limit))
-      res.send({data: result, page: Number(page), totalPage })
-    })
-
-
-
+    //Owner Properties
+    app.get("/owner/properties", verifyToken, ownerVerify, async (req, res) => {
+      const { page = 1, limit = 10 } = req.query;
+      const skip = (Number(page) - 1) * Number(limit);
+      const result = await propertiesCollection
+        .find({ userId: req.user.id })
+        .skip(skip)
+        .limit(Number(limit))
+        .toArray();
+      const totalData = await propertiesCollection.countDocuments({
+        userId: req.user.id,
+      });
+      const totalPage = Math.ceil(totalData / Number(limit));
+      res.send({ data: result, page: Number(page), totalPage });
+    });
 
     // Send a ping to confirm a successful connection
     // await client.db("admin").command({ ping: 1 });
