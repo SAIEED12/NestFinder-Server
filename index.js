@@ -79,6 +79,7 @@ async function run() {
     await client.connect();
     const db = client.db("nestFinder");
     const propertiesCollection = db.collection("properties");
+    const bookingsCollection = db.collection("bookings");
 
     //Featured Properties
     app.get("/api/properties/featured", async (req, res) => {
@@ -153,6 +154,17 @@ app.get('/all-properties/:id', async(req, res) =>{
         res.send(result);
       },
     );
+
+    //Booking API
+    app.post('/api/bookings', async (req, res) =>{
+      const booking = req.body
+      const newBooking = {
+        ...booking,
+        createdAt: new Date()
+      }
+      const result = await bookingsCollection.insertOne(newBooking)
+      res.send(result)
+    })
 
     //Owner Properties
     app.get("/owner/properties", verifyToken, ownerVerify, async (req, res) => {
