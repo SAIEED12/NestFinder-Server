@@ -164,6 +164,7 @@ app.get('/all-properties/:id', async(req, res) =>{
       }
       const result = await bookingsCollection.insertOne(newBooking)
       res.send(result)
+    
     })
 
     //Owner Properties
