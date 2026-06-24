@@ -611,6 +611,178 @@ async function run() {
       }
     });
 
+    app.get("/api/admin/properties", async (req, res) => {
+      try {
+        const properties = await propertiesCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.json(properties);
+      } catch (error) {
+        console.error("Admin properties fetch breakdown:", error);
+        res
+          .status(500)
+          .json({ error: "Internal Server Error compiling global listings." });
+      }
+    });
+
+    // 2. Admin Modify Property Status (Approve/Reject with customized feedback notes)
+    app.patch("/api/admin/properties/:id/status", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status, adminFeedback } = req.body;
+
+        if (!["Approved", "Rejected", "Pending"].includes(status)) {
+          return res
+            .status(400)
+            .json({ error: "Invalid status state transition." });
+        }
+
+        const updateData = { status, updatedAt: new Date() };
+
+        // Always attach feedback string parameter context if explicitly provided
+        if (adminFeedback !== undefined) {
+          updateData.adminFeedback = adminFeedback;
+        }
+
+        const result = await propertiesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData },
+        );
+
+        if (result.matchedCount === 0) {
+          return res
+            .status(404)
+            .json({ error: "Target listing profile not located." });
+        }
+
+        res.json({
+          success: true,
+          message: `Property status adjusted cleanly to ${status}.`,
+        });
+      } catch (error) {
+        console.error("Status adjustment database exception:", error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // 3. Delete Property from App Ledger
+    app.delete("/api/admin/properties/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const result = await propertiesCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        if (result.deletedCount === 0) {
+          return res.status(404).json({ error: "Listing index not found." });
+        }
+        res.json({
+          success: true,
+          message: "Property eliminated successfully from catalog index.",
+        });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // Admin Update Property (title, location, rent, propertyType, status)
+    app.patch("/api/admin/properties/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { title, location, rent, propertyType, status } = req.body;
+
+        const updateData = { updatedAt: new Date() };
+        if (title) updateData.title = title;
+        if (location) updateData.location = location;
+        if (rent) updateData.rent = Number(rent);
+        if (propertyType) updateData.propertyType = propertyType;
+        if (status) updateData.status = status;
+
+        const result = await propertiesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updateData },
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ error: "Property not found." });
+        }
+
+        res.json({ success: true, message: "Property updated successfully." });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    //Show Bookings for admin
+    app.get("/api/admin/bookings", async (req, res) => {
+  try {
+    const bookings = await bookingsCollection.find({}).sort({ createdAt: -1 }).toArray();
+
+    // Populate corresponding property details for each booking row
+    const populatedBookings = await Promise.all(
+      bookings.map(async (booking) => {
+        const property = await propertiesCollection.findOne({ _id: booking.propertyId });
+        return {
+          ...booking,
+          property: property || null,
+          _id: booking._id.toString(),
+          propertyId: booking.propertyId.toString(),
+        };
+      })
+    );
+
+    res.json(populatedBookings);
+  } catch (error) {
+    console.error("Admin bookings fetch exception:", error);
+    res.status(500).json({ error: "Internal Server Error compiling global booking registry." });
+  }
+});
+
+
+//Transaction
+app.get("/api/admin/transactions", async (req, res) => {
+  try {
+    // 1. Target all bookings that have completed checkout
+    const paidBookings = await bookingsCollection
+      .find({ paymentStatus: "Paid" })
+      .sort({ updatedAt: -1 })
+      .toArray();
+
+    // 2. Cross-reference property listings and owner identities
+    const enrichedTransactions = await Promise.all(
+      paidBookings.map(async (booking) => {
+        const property = await propertiesCollection.findOne({ _id: booking.propertyId });
+        
+        let ownerName = "System Allocation";
+        if (property && property.userId) {
+          const ownerAccount = await db.collection("user").findOne({ 
+            $or: [
+              { _id: new ObjectId(property.userId) },
+              { id: property.userId }
+            ]
+          });
+          if (ownerAccount) ownerName = ownerAccount.name || ownerAccount.email;
+        }
+
+        return {
+          transactionId: booking.paymentIntentId || booking.stripeSessionId || `TXN-${booking._id.toString().substring(18)}`,
+          propertyName: booking.propertyTitle || property?.title || "Premium Rental Unit",
+          tenantName: booking.tenantName || "Verified Tenant",
+          ownerName: ownerName,
+          amount: booking.rentAmount,
+          date: booking.updatedAt || booking.createdAt,
+          propertyId: booking.propertyId.toString()
+        };
+      })
+    );
+
+    res.json(enrichedTransactions);
+  } catch (error) {
+    console.error("Admin transactions ledger compile exception:", error);
+    res.status(500).json({ error: "Internal Server Error compiling platform financial balances." });
+  }
+});
+
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
