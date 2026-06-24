@@ -88,6 +88,7 @@ async function run() {
     const bookingsCollection = db.collection("bookings");
     const favoritesCollection = db.collection("favorites");
     const usersCollection = db.collection("user");
+    const reviewsCollection = db.collection("reviews");
 
     // Featured Properties
     app.get("/api/properties/featured", async (req, res) => {
@@ -245,7 +246,7 @@ async function run() {
       }
     });
 
-    // 💡 FIXED: Cleaned up and secured single dynamic state modification endpoint path
+    // Id wise bookings
     app.patch("/api/bookings/:id/status", verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
@@ -396,14 +397,14 @@ async function run() {
             .json({ success: false, message: "Missing required fields" });
         }
 
-        // Check if it already exists to prevent duplicate entries
+        // prevent duplicate entries
         const existingFavorite = await favoritesCollection.findOne({
           propertyId: new ObjectId(propertyId),
           tenantId: tenantId,
         });
 
         if (existingFavorite) {
-          // Toggle logic: If clicked again, remove it from favorites
+          // If clicked again, remove it from favorites
           await favoritesCollection.deleteOne({ _id: existingFavorite._id });
           return res.status(200).json({
             success: true,
@@ -433,7 +434,7 @@ async function run() {
       }
     });
 
-    // 2. Get a specific tenant's populated favorites list
+    // 2. Specific tenant's favorites list
     app.get("/api/favorites/tenant/:userId", async (req, res) => {
       try {
         const { userId } = req.params;
@@ -441,7 +442,6 @@ async function run() {
           .find({ tenantId: userId })
           .toArray();
 
-        // Joint lookups to populate corresponding property listings details
         const populatedFavorites = await Promise.all(
           items.map(async (fav) => {
             const property = await propertiesCollection.findOne({
@@ -466,7 +466,6 @@ async function run() {
     });
 
     //Recharts
-    // Add this route inside the run() function block in server.js
     app.get(
       "/api/owner/analytics/:ownerId",
       verifyToken,
@@ -489,7 +488,6 @@ async function run() {
             })
             .toArray();
 
-          // 3. Filter confirmed / paid items to calculate revenue aggregates
           // (Matches paymentStatus: "Paid" or bookingStatus: "Approved")
           const successfulBookings = totalBookingsList.filter(
             (b) => b.paymentStatus === "Paid" || b.bookingStatus === "Approved",
@@ -501,7 +499,7 @@ async function run() {
             0,
           );
 
-          // 4. Generate 12-Month Historical Trailing Dataset for Recharts Line Graph
+          // 12-Month Dataset for Recharts Line Graph
           const monthlyDataMap = {};
           const now = new Date();
 
@@ -520,7 +518,6 @@ async function run() {
             };
           }
 
-          // Populate actual transactional volume records from MongoDB timestamps
           successfulBookings.forEach((booking) => {
             const date = booking.createdAt
               ? new Date(booking.createdAt)
@@ -533,7 +530,7 @@ async function run() {
             }
           });
 
-          // Sort chart timeline sequentially
+          // Sort chart timeline
           const chartData = Object.values(monthlyDataMap).sort((a, b) =>
             a.sortKey.localeCompare(b.sortKey),
           );
@@ -570,7 +567,7 @@ async function run() {
       }
     });
 
-    // 2. Change a user's access control role dynamically
+    // 2. Change a user's access control role
     app.patch("/api/admin/users/:id/role", async (req, res) => {
       try {
         const { id } = req.params;
@@ -588,7 +585,6 @@ async function run() {
         );
 
         if (result.matchedCount === 0) {
-          // Fallback fallback check: Better Auth sometimes uses raw string ids for its users collection
           const fallbackResult = await usersCollection.updateOne(
             { id: id },
             { $set: { role, updatedAt: new Date() } },
@@ -626,7 +622,7 @@ async function run() {
       }
     });
 
-    // 2. Admin Modify Property Status (Approve/Reject with customized feedback notes)
+    // 2. Approve/Reject with feedback
     app.patch("/api/admin/properties/:id/status", async (req, res) => {
       try {
         const { id } = req.params;
@@ -640,7 +636,6 @@ async function run() {
 
         const updateData = { status, updatedAt: new Date() };
 
-        // Always attach feedback string parameter context if explicitly provided
         if (adminFeedback !== undefined) {
           updateData.adminFeedback = adminFeedback;
         }
@@ -666,7 +661,7 @@ async function run() {
       }
     });
 
-    // 3. Delete Property from App Ledger
+    // 3. Delete Property
     app.delete("/api/admin/properties/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -685,7 +680,7 @@ async function run() {
       }
     });
 
-    // Admin Update Property (title, location, rent, propertyType, status)
+    // Admin Update Property
     app.patch("/api/admin/properties/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -715,71 +710,216 @@ async function run() {
 
     //Show Bookings for admin
     app.get("/api/admin/bookings", async (req, res) => {
-  try {
-    const bookings = await bookingsCollection.find({}).sort({ createdAt: -1 }).toArray();
+      try {
+        const bookings = await bookingsCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
 
-    // Populate corresponding property details for each booking row
-    const populatedBookings = await Promise.all(
-      bookings.map(async (booking) => {
-        const property = await propertiesCollection.findOne({ _id: booking.propertyId });
-        return {
-          ...booking,
-          property: property || null,
-          _id: booking._id.toString(),
-          propertyId: booking.propertyId.toString(),
-        };
-      })
-    );
+        const populatedBookings = await Promise.all(
+          bookings.map(async (booking) => {
+            const property = await propertiesCollection.findOne({
+              _id: booking.propertyId,
+            });
+            return {
+              ...booking,
+              property: property || null,
+              _id: booking._id.toString(),
+              propertyId: booking.propertyId.toString(),
+            };
+          }),
+        );
 
-    res.json(populatedBookings);
-  } catch (error) {
-    console.error("Admin bookings fetch exception:", error);
-    res.status(500).json({ error: "Internal Server Error compiling global booking registry." });
-  }
-});
+        res.json(populatedBookings);
+      } catch (error) {
+        console.error("Admin bookings fetch exception:", error);
+        res.status(500).json({
+          error: "Internal Server Error compiling global booking registry.",
+        });
+      }
+    });
 
+    //Transaction
+    app.get("/api/admin/transactions", async (req, res) => {
+      try {
+        // 1. Target all bookings that have completed checkout
+        const paidBookings = await bookingsCollection
+          .find({ paymentStatus: "Paid" })
+          .sort({ updatedAt: -1 })
+          .toArray();
 
-//Transaction
-app.get("/api/admin/transactions", async (req, res) => {
-  try {
-    // 1. Target all bookings that have completed checkout
-    const paidBookings = await bookingsCollection
-      .find({ paymentStatus: "Paid" })
-      .sort({ updatedAt: -1 })
-      .toArray();
+        const enrichedTransactions = await Promise.all(
+          paidBookings.map(async (booking) => {
+            const property = await propertiesCollection.findOne({
+              _id: booking.propertyId,
+            });
 
-    // 2. Cross-reference property listings and owner identities
-    const enrichedTransactions = await Promise.all(
-      paidBookings.map(async (booking) => {
-        const property = await propertiesCollection.findOne({ _id: booking.propertyId });
-        
-        let ownerName = "System Allocation";
-        if (property && property.userId) {
-          const ownerAccount = await db.collection("user").findOne({ 
-            $or: [
-              { _id: new ObjectId(property.userId) },
-              { id: property.userId }
-            ]
+            let ownerName = "System Allocation";
+            if (property && property.userId) {
+              const ownerAccount = await db.collection("user").findOne({
+                $or: [
+                  { _id: new ObjectId(property.userId) },
+                  { id: property.userId },
+                ],
+              });
+              if (ownerAccount)
+                ownerName = ownerAccount.name || ownerAccount.email;
+            }
+
+            return {
+              transactionId:
+                booking.paymentIntentId ||
+                booking.stripeSessionId ||
+                `TXN-${booking._id.toString().substring(18)}`,
+              propertyName:
+                booking.propertyTitle ||
+                property?.title ||
+                "Premium Rental Unit",
+              tenantName: booking.tenantName || "Verified Tenant",
+              ownerName: ownerName,
+              amount: booking.rentAmount,
+              date: booking.updatedAt || booking.createdAt,
+              propertyId: booking.propertyId.toString(),
+            };
+          }),
+        );
+
+        res.json(enrichedTransactions);
+      } catch (error) {
+        console.error("Admin transactions ledger compile exception:", error);
+        res.status(500).json({
+          error: "Internal Server Error compiling platform financial balances.",
+        });
+      }
+    });
+
+    //Review Api
+    app.post("/api/properties/:id/reviews", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { tenantName, tenantEmail, rating, comment } = req.body;
+
+        if (!rating || rating < 1 || rating > 5) {
+          return res.status(400).json({
+            error: "Rating score value must sit exactly between 1 and 5 stars.",
           });
-          if (ownerAccount) ownerName = ownerAccount.name || ownerAccount.email;
         }
 
-        return {
-          transactionId: booking.paymentIntentId || booking.stripeSessionId || `TXN-${booking._id.toString().substring(18)}`,
-          propertyName: booking.propertyTitle || property?.title || "Premium Rental Unit",
-          tenantName: booking.tenantName || "Verified Tenant",
-          ownerName: ownerName,
-          amount: booking.rentAmount,
-          date: booking.updatedAt || booking.createdAt,
-          propertyId: booking.propertyId.toString()
+        const reviewDocument = {
+          propertyId: new ObjectId(id),
+          tenantName,
+          tenantEmail,
+          rating: Number(rating),
+          comment: comment?.trim() || "",
+          createdAt: new Date(),
         };
-      })
-    );
 
-    res.json(enrichedTransactions);
+        const result = await reviewsCollection.insertOne(reviewDocument);
+
+        // Optional: Recalculate and update aggregate average rating inside propertiesCollection here if desired
+
+        res.json({
+          success: true,
+          message: "Review posted successfully to structural log files!",
+          review: reviewDocument,
+        });
+      } catch (error) {
+        console.error("Review submission mutation crash:", error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // 2. Fetch all reviews logged against a single property entry
+    app.get("/api/properties/:id/reviews", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const reviewLogs = await reviewsCollection
+          .find({ propertyId: new ObjectId(id) })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.json(reviewLogs);
+      } catch (error) {
+        console.error("Reviews query engine error:", error);
+        res
+          .status(500)
+          .json({ error: "Failed to compile property review listings." });
+      }
+    });
+
+    // Fetch 4 high-quality tenant reviews for the homepage showcase
+    app.get("/api/home/top-reviews", async (req, res) => {
+      try {
+        // Queries the database for reviews with a rating of 4 or 5 stars, limited to 4 records
+        const highQualityReviews = await reviewsCollection
+          .find({ rating: { $gte: 4 } })
+          .sort({ createdAt: -1 })
+          .limit(4)
+          .toArray();
+
+        // Populate the matching property title context for each homepage review card
+        const populatedHomeReviews = await Promise.all(
+          highQualityReviews.map(async (review) => {
+            const property = await propertiesCollection.findOne({
+              _id: review.propertyId,
+            });
+            return {
+              ...review,
+              propertyTitle: property ? property.title : "Premium Rental Unit",
+              _id: review._id.toString(),
+              propertyId: review.propertyId.toString(),
+            };
+          }),
+        );
+
+        res.json(populatedHomeReviews);
+      } catch (error) {
+        console.error("Homepage reviews compilation exception:", error);
+        res
+          .status(500)
+          .json({ error: "Failed to compile highlighted tenant reviews." });
+      }
+    });
+
+    //Searching, Sorting, Filtering
+app.get("/api/public/properties", async (req, res) => {
+  try {
+    const { search, propertyType, sort } = req.query;
+    let queryFilter = { status: "Approved" };
+
+    if (search && search !== "undefined" && search.trim() !== "") {
+      queryFilter.location = { $regex: search.trim(), $options: "i" };
+    }
+
+    if (propertyType && propertyType !== "all") {
+      queryFilter.propertyType = propertyType.trim().toLowerCase();
+    }
+
+    let sortConfig = {};
+    if (sort === "asc" || sort === "low-to-high") {
+      sortConfig.rent = 1;
+    } else if (sort === "desc" || sort === "high-to-low") {
+      sortConfig.rent = -1;
+    } else {
+      sortConfig.createdAt = -1;
+    }
+
+    const properties = await propertiesCollection
+      .aggregate([
+        { $match: queryFilter },
+        {
+          $addFields: {
+            rent: { $convert: { input: "$rent", to: "double", onError: 0, onNull: 0 } }
+          }
+        },
+        { $sort: sortConfig }
+      ])
+      .toArray();
+
+    res.json(properties);
   } catch (error) {
-    console.error("Admin transactions ledger compile exception:", error);
-    res.status(500).json({ error: "Internal Server Error compiling platform financial balances." });
+    console.error("Public sorting fallback crash:", error);
+    res.status(500).json({ error: "Failed to compile accurately ordered property matrices." });
   }
 });
 
