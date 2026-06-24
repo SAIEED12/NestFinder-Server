@@ -87,6 +87,7 @@ async function run() {
     const propertiesCollection = db.collection("properties");
     const bookingsCollection = db.collection("bookings");
     const favoritesCollection = db.collection("favorites");
+    const usersCollection = db.collection("user");
 
     // Featured Properties
     app.get("/api/properties/featured", async (req, res) => {
@@ -166,12 +167,10 @@ async function run() {
       try {
         const booking = req.body;
         if (!booking.propertyId || !booking.tenantId || !booking.moveInDate) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "Missing required booking fields",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Missing required booking fields",
+          });
         }
 
         const tempId = new ObjectId().toString();
@@ -195,22 +194,18 @@ async function run() {
         };
 
         const result = await bookingsCollection.insertOne(newBooking);
-        res
-          .status(201)
-          .json({
-            success: true,
-            bookingId: result.insertedId,
-            tempId: tempId,
-            booking: newBooking,
-          });
+        res.status(201).json({
+          success: true,
+          bookingId: result.insertedId,
+          tempId: tempId,
+          booking: newBooking,
+        });
       } catch (error) {
-        res
-          .status(500)
-          .json({
-            success: false,
-            message: "Failed to create booking",
-            error: error.message,
-          });
+        res.status(500).json({
+          success: false,
+          message: "Failed to create booking",
+          error: error.message,
+        });
       }
     });
 
@@ -269,11 +264,9 @@ async function run() {
           return res.status(404).json({ error: "Booking not found" });
 
         if (status === "Approved" && existingBooking.paymentStatus !== "Paid") {
-          return res
-            .status(400)
-            .json({
-              error: "Cannot approve booking. Payment not completed yet.",
-            });
+          return res.status(400).json({
+            error: "Cannot approve booking. Payment not completed yet.",
+          });
         }
 
         const updateData = { bookingStatus: status, updatedAt: new Date() };
@@ -412,13 +405,11 @@ async function run() {
         if (existingFavorite) {
           // Toggle logic: If clicked again, remove it from favorites
           await favoritesCollection.deleteOne({ _id: existingFavorite._id });
-          return res
-            .status(200)
-            .json({
-              success: true,
-              message: "Removed from favorites",
-              isFavorite: false,
-            });
+          return res.status(200).json({
+            success: true,
+            message: "Removed from favorites",
+            isFavorite: false,
+          });
         }
 
         const newFavorite = {
@@ -428,14 +419,12 @@ async function run() {
         };
 
         const result = await favoritesCollection.insertOne(newFavorite);
-        res
-          .status(201)
-          .json({
-            success: true,
-            message: "Added to favorites",
-            isFavorite: true,
-            insertedId: result.insertedId,
-          });
+        res.status(201).json({
+          success: true,
+          message: "Added to favorites",
+          isFavorite: true,
+          insertedId: result.insertedId,
+        });
       } catch (error) {
         console.error("Error managing favorites ledger:", error);
         res
@@ -475,7 +464,6 @@ async function run() {
         res.status(500).json({ error: error.message });
       }
     });
-
 
     //Recharts
     // Add this route inside the run() function block in server.js
@@ -565,6 +553,63 @@ async function run() {
         }
       },
     );
+
+    //Admin API
+    app.get("/api/admin/users", async (req, res) => {
+      try {
+        const users = await usersCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.json(users);
+      } catch (error) {
+        console.error("Admin fetch users failure:", error);
+        res
+          .status(500)
+          .json({ error: "Internal Server Error compiling user records." });
+      }
+    });
+
+    // 2. Change a user's access control role dynamically
+    app.patch("/api/admin/users/:id/role", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { role } = req.body;
+
+        if (!["admin", "owner", "tenant"].includes(role)) {
+          return res
+            .status(400)
+            .json({ error: "Invalid role transition parameter." });
+        }
+
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { role, updatedAt: new Date() } },
+        );
+
+        if (result.matchedCount === 0) {
+          // Fallback fallback check: Better Auth sometimes uses raw string ids for its users collection
+          const fallbackResult = await usersCollection.updateOne(
+            { id: id },
+            { $set: { role, updatedAt: new Date() } },
+          );
+
+          if (fallbackResult.matchedCount === 0) {
+            return res
+              .status(404)
+              .json({ error: "Target user profile index record not found." });
+          }
+        }
+
+        res.json({
+          success: true,
+          message: `User role successfully elevated/changed to ${role}.`,
+        });
+      } catch (error) {
+        console.error("Role update mutation error:", error);
+        res.status(500).json({ error: error.message });
+      }
+    });
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
