@@ -6,8 +6,14 @@ const dotenv = require("dotenv");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const { jwtVerify, createRemoteJWKSet } = require("jose-cjs");
+
 dotenv.config();
 const app = express();
+const port = process.env.PORT || 5000;
+
+// 💡 BETTER-AUTH MIDDLEWARE ADAPTER IMPORT
+const { toNodeHandler } = require("better-auth/node");
+const { auth } = require("./auth"); // Double-check that auth.js sits in the same directory!
 
 app.use(
   cors({
@@ -17,7 +23,9 @@ app.use(
   }),
 );
 app.use(express.json());
-const port = process.env.PORT || 5000;
+
+// 💡 MOUNT BETTER-AUTH WILDCARD HANDLER ROUTE ABOVE CUSTOM API ENDPOINTS
+app.all("/api/auth/*", toNodeHandler(auth));
 
 const uri = process.env.MONGODB_URI;
 
@@ -55,7 +63,7 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
-// Verifying User
+// Verifying User Roles
 const tenantVerify = async (req, res, next) => {
   const user = req.user;
   if (user && user.role !== "tenant") {
@@ -80,16 +88,19 @@ const adminVerify = async (req, res, next) => {
   next();
 };
 
-// async function run() {
-//   try {
-//     await 
-client.connect().catch(console.dir)
+// 💡 FIXED: RESTORED UNIFIED ASYNC DATABASE CONNECTIVITY ENCAPSULATION WRAPPER
+async function run() {
+  try {
+    await client.connect();
+    
     const db = client.db("nestFinder");
     const propertiesCollection = db.collection("properties");
     const bookingsCollection = db.collection("bookings");
     const favoritesCollection = db.collection("favorites");
     const usersCollection = db.collection("user");
     const reviewsCollection = db.collection("reviews");
+
+    console.log("Database layers securely connected. Registering endpoints...");
 
     // Featured Properties
     app.get("/api/properties/featured", async (req, res) => {
@@ -142,11 +153,15 @@ client.connect().catch(console.dir)
 
     // Details Page
     app.get("/all-properties/:id", async (req, res) => {
-      const { id } = req.params;
-      const result = await propertiesCollection.findOne({
-        _id: new ObjectId(id),
-      });
-      res.send(result);
+      try {
+        const { id } = req.params;
+        const result = await propertiesCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error getting property details" });
+      }
     });
 
     // Owner Add Property
@@ -373,21 +388,25 @@ client.connect().catch(console.dir)
 
     // Owner Properties View List
     app.get("/owner/properties", verifyToken, ownerVerify, async (req, res) => {
-      const { page = 1, limit = 10 } = req.query;
-      const skip = (Number(page) - 1) * Number(limit);
-      const result = await propertiesCollection
-        .find({ userId: req.user?.id })
-        .skip(skip)
-        .limit(Number(limit))
-        .toArray();
-      const totalData = await propertiesCollection.countDocuments({
-        userId: req.user?.id,
-      });
-      const totalPage = Math.ceil(totalData / Number(limit));
-      res.send({ data: result, page: Number(page), totalPage });
+      try {
+        const { page = 1, limit = 10 } = req.query;
+        const skip = (Number(page) - 1) * Number(limit);
+        const result = await propertiesCollection
+          .find({ userId: req.user?.id })
+          .skip(skip)
+          .limit(Number(limit))
+          .toArray();
+        const totalData = await propertiesCollection.countDocuments({
+          userId: req.user?.id,
+        });
+        const totalPage = Math.ceil(totalData / Number(limit));
+        res.send({ data: result, page: Number(page), totalPage });
+      } catch (error) {
+        res.status(500).send({ message: "Error loading owner properties" });
+      }
     });
 
-    //Add to favourites API
+    // Add to favourites API
     app.post("/api/favorites", async (req, res) => {
       try {
         const { propertyId, tenantId } = req.body;
@@ -398,14 +417,12 @@ client.connect().catch(console.dir)
             .json({ success: false, message: "Missing required fields" });
         }
 
-        // prevent duplicate entries
         const existingFavorite = await favoritesCollection.findOne({
           propertyId: new ObjectId(propertyId),
           tenantId: tenantId,
         });
 
         if (existingFavorite) {
-          // If clicked again, remove it from favorites
           await favoritesCollection.deleteOne({ _id: existingFavorite._id });
           return res.status(200).json({
             success: true,
@@ -435,7 +452,7 @@ client.connect().catch(console.dir)
       }
     });
 
-    // 2. Specific tenant's favorites list
+    // Specific tenant's favorites list
     app.get("/api/favorites/tenant/:userId", async (req, res) => {
       try {
         const { userId } = req.params;
@@ -455,7 +472,6 @@ client.connect().catch(console.dir)
           }),
         );
 
-        // Filter out any favorites pointing to a property that was deleted from the app
         const cleanFavorites = populatedFavorites.filter(
           (item) => item !== null && item.title,
         );
@@ -466,7 +482,7 @@ client.connect().catch(console.dir)
       }
     });
 
-    //Recharts
+    // Recharts Owner Analytics
     app.get(
       "/api/owner/analytics/:ownerId",
       verifyToken,
@@ -475,21 +491,18 @@ client.connect().catch(console.dir)
         try {
           const { ownerId } = req.params;
 
-          // 1. Fetch all properties belonging to this owner
           const ownerProperties = await propertiesCollection
             .find({ userId: ownerId })
             .toArray();
           const totalProperties = ownerProperties.length;
           const propertyIds = ownerProperties.map((p) => p._id);
 
-          // 2. Fetch all bookings for these specific properties
           const totalBookingsList = await bookingsCollection
             .find({
               propertyId: { $in: propertyIds },
             })
             .toArray();
 
-          // (Matches paymentStatus: "Paid" or bookingStatus: "Approved")
           const successfulBookings = totalBookingsList.filter(
             (b) => b.paymentStatus === "Paid" || b.bookingStatus === "Approved",
           );
@@ -500,18 +513,16 @@ client.connect().catch(console.dir)
             0,
           );
 
-          // 12-Month Dataset for Recharts Line Graph
           const monthlyDataMap = {};
           const now = new Date();
 
-          // Initialize the last 12 months with $0 fields to ensure chart alignment
           for (let i = 11; i >= 0; i--) {
             const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
             const monthLabel = d.toLocaleString("en-US", {
               month: "short",
               year: "2-digit",
-            }); // e.g., "Jul 25"
-            const sortingKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; // "2025-07"
+            });
+            const sortingKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
             monthlyDataMap[sortingKey] = {
               name: monthLabel,
               earnings: 0,
@@ -531,7 +542,6 @@ client.connect().catch(console.dir)
             }
           });
 
-          // Sort chart timeline
           const chartData = Object.values(monthlyDataMap).sort((a, b) =>
             a.sortKey.localeCompare(b.sortKey),
           );
@@ -552,7 +562,7 @@ client.connect().catch(console.dir)
       },
     );
 
-    //Admin API
+    // Admin API - Users
     app.get("/api/admin/users", async (req, res) => {
       try {
         const users = await usersCollection
@@ -568,7 +578,7 @@ client.connect().catch(console.dir)
       }
     });
 
-    // 2. Change a user's access control role
+    // Change a user's access control role
     app.patch("/api/admin/users/:id/role", async (req, res) => {
       try {
         const { id } = req.params;
@@ -608,6 +618,7 @@ client.connect().catch(console.dir)
       }
     });
 
+    // Admin API - Properties Listing Index
     app.get("/api/admin/properties", async (req, res) => {
       try {
         const properties = await propertiesCollection
@@ -623,7 +634,7 @@ client.connect().catch(console.dir)
       }
     });
 
-    // 2. Approve/Reject with feedback
+    // Approve/Reject with feedback
     app.patch("/api/admin/properties/:id/status", async (req, res) => {
       try {
         const { id } = req.params;
@@ -662,7 +673,7 @@ client.connect().catch(console.dir)
       }
     });
 
-    // 3. Delete Property
+    // Delete Property Catalog Index
     app.delete("/api/admin/properties/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -681,7 +692,7 @@ client.connect().catch(console.dir)
       }
     });
 
-    // Admin Update Property
+    // Admin Update Property Structure Modifications
     app.patch("/api/admin/properties/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -709,7 +720,7 @@ client.connect().catch(console.dir)
       }
     });
 
-    //Show Bookings for admin
+    // Show Bookings Registry to Administration
     app.get("/api/admin/bookings", async (req, res) => {
       try {
         const bookings = await bookingsCollection
@@ -740,10 +751,9 @@ client.connect().catch(console.dir)
       }
     });
 
-    //Transaction
+    // Admin Platform Transaction Ledger Processing
     app.get("/api/admin/transactions", async (req, res) => {
       try {
-        // 1. Target all bookings that have completed checkout
         const paidBookings = await bookingsCollection
           .find({ paymentStatus: "Paid" })
           .sort({ updatedAt: -1 })
@@ -794,7 +804,7 @@ client.connect().catch(console.dir)
       }
     });
 
-    //Review Api
+    // Submit Review Endpoint Hook
     app.post("/api/properties/:id/reviews", async (req, res) => {
       try {
         const { id } = req.params;
@@ -816,9 +826,6 @@ client.connect().catch(console.dir)
         };
 
         const result = await reviewsCollection.insertOne(reviewDocument);
-
-        // Optional: Recalculate and update aggregate average rating inside propertiesCollection here if desired
-
         res.json({
           success: true,
           message: "Review posted successfully to structural log files!",
@@ -830,7 +837,7 @@ client.connect().catch(console.dir)
       }
     });
 
-    // 2. Fetch all reviews logged against a single property entry
+    // Fetch all reviews logged against a single property entry
     app.get("/api/properties/:id/reviews", async (req, res) => {
       try {
         const { id } = req.params;
@@ -851,14 +858,12 @@ client.connect().catch(console.dir)
     // Fetch 4 high-quality tenant reviews for the homepage showcase
     app.get("/api/home/top-reviews", async (req, res) => {
       try {
-        // Queries the database for reviews with a rating of 4 or 5 stars, limited to 4 records
         const highQualityReviews = await reviewsCollection
           .find({ rating: { $gte: 4 } })
           .sort({ createdAt: -1 })
           .limit(4)
           .toArray();
 
-        // Populate the matching property title context for each homepage review card
         const populatedHomeReviews = await Promise.all(
           highQualityReviews.map(async (review) => {
             const property = await propertiesCollection.findOne({
@@ -882,119 +887,107 @@ client.connect().catch(console.dir)
       }
     });
 
-    //Searching, Sorting, Filtering
+    // Searching, Sorting, Filtering Engine with Facet Pagination
     app.get("/api/public/properties", async (req, res) => {
-  try {
-    // Destructure query parameters including current page matrix indicators
-    const { search, propertyType, sort, minPrice, maxPrice, page = 1, limit = 10 } = req.query;
-    
+      try {
+        const { search, propertyType, sort, minPrice, maxPrice, page = 1, limit = 12 } = req.query;
 
-    const activePage = Math.max(1, parseInt(page));
-    const pageLimit = Math.max(1, parseInt(limit));
-    const skipOffset = (activePage - 1) * pageLimit;
+        const activePage = Math.max(1, parseInt(page));
+        const pageLimit = Math.max(1, parseInt(limit));
+        const skipOffset = (activePage - 1) * pageLimit;
 
-    let queryFilter = { status: "Approved" };
+        let queryFilter = { status: "Approved" };
 
-    if (search && search !== "undefined" && search.trim() !== "") {
-      queryFilter.location = { $regex: search.trim(), $options: "i" };
-    }
+        if (search && search !== "undefined" && search.trim() !== "") {
+          queryFilter.location = { $regex: search.trim(), $options: "i" };
+        }
 
-    if (propertyType && propertyType !== "all") {
-      queryFilter.propertyType = propertyType.trim().toLowerCase();
-    }
+        if (propertyType && propertyType !== "all") {
+          queryFilter.propertyType = propertyType.trim().toLowerCase();
+        }
 
-    let sortConfig = {};
-    if (sort === "asc" || sort === "low-to-high") {
-      sortConfig.rent = 1;
-    } else if (sort === "desc" || sort === "high-to-low") {
-      sortConfig.rent = -1;
-    } else {
-      sortConfig.createdAt = -1;
-    }
+        let sortConfig = {};
+        if (sort === "asc" || sort === "low-to-high") {
+          sortConfig.rent = 1;
+        } else if (sort === "desc" || sort === "high-to-low") {
+          sortConfig.rent = -1;
+        } else {
+          sortConfig.createdAt = -1;
+        }
 
-    let priceFilter = {};
-    if (minPrice && !isNaN(minPrice)) {
-      priceFilter.rent = { ...priceFilter.rent, $gte: Number(minPrice) };
-    }
-    if (maxPrice && !isNaN(maxPrice)) {
-      priceFilter.rent = { ...priceFilter.rent, $lte: Number(maxPrice) };
-    }
+        let priceFilter = {};
+        if (minPrice && !isNaN(minPrice)) {
+          priceFilter.rent = { ...priceFilter.rent, $gte: Number(minPrice) };
+        }
+        if (maxPrice && !isNaN(maxPrice)) {
+          priceFilter.rent = { ...priceFilter.rent, $lte: Number(maxPrice) };
+        }
 
-  
-    const aggregationResult = await propertiesCollection
-      .aggregate([
-
-        { $match: queryFilter },
-        {
-          $addFields: {
-            rent: {
-              $convert: {
-                input: "$rent",
-                to: "double",
-                onError: 0,
-                onNull: 0,
+        const aggregationResult = await propertiesCollection
+          .aggregate([
+            { $match: queryFilter },
+            {
+              $addFields: {
+                rent: {
+                  $convert: {
+                    input: "$rent",
+                    to: "double",
+                    onError: 0,
+                    onNull: 0,
+                  },
+                },
               },
             },
-          },
-        },
+            ...(Object.keys(priceFilter).length > 0 ? [{ $match: priceFilter }] : []),
+            {
+              $facet: {
+                totalCount: [{ $count: "count" }],
+                paginatedData: [
+                  { $sort: sortConfig },
+                  { $skip: skipOffset },
+                  { $limit: pageLimit }
+                ]
+              }
+            }
+          ])
+          .toArray();
 
-        ...(Object.keys(priceFilter).length > 0 ? [{ $match: priceFilter }] : []),
+        const totalCount = aggregationResult[0]?.totalCount[0]?.count || 0;
+        const properties = aggregationResult[0]?.paginatedData || [];
+        const totalPages = Math.ceil(totalCount / pageLimit);
 
-        {
-          $facet: {
-            totalCount: [{ $count: "count" }],
-            paginatedData: [
-              { $sort: sortConfig },
-              { $skip: skipOffset },
-              { $limit: pageLimit }
-            ]
+        res.json({
+          success: true,
+          data: properties,
+          meta: {
+            totalItems: totalCount,
+            totalPages: totalPages,
+            currentPage: activePage,
+            itemsPerPage: pageLimit
           }
-        }
-      ])
-      .toArray();
-
-    const totalCount = aggregationResult[0]?.totalCount[0]?.count || 0;
-    const properties = aggregationResult[0]?.paginatedData || [];
-    const totalPages = Math.ceil(totalCount / pageLimit);
-
-    res.json({
-      success: true,
-      data: properties,
-      meta: {
-        totalItems: totalCount,
-        totalPages: totalPages,
-        currentPage: activePage,
-        itemsPerPage: pageLimit
+        });
+      } catch (error) {
+        console.error("Public sorting pagination fallback crash:", error);
+        res.status(500).json({
+          success: false,
+          error: "Failed to accurately compile paginated property grids."
+        });
       }
     });
-  } catch (error) {
-    console.error("Public sorting pagination fallback crash:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to accurately compile paginated property grids."
+
+    // Base verification path handler for Vercel default domain status metrics check
+    app.get("/", (req, res) => {
+      res.send("NestFinder Server Operational.");
     });
+    app.listen(port, () => {
+      console.log(`Server executing seamlessly over port: ${port}`);
+    });
+
+  } catch (err) {
+    console.error("Critical server initialization crash:", err);
   }
-});
+}
 
-//     console.log(
-//       "Pinged your deployment. You successfully connected to MongoDB!",
-//     );
-//   } finally {
-//     // Keep connection active
-//   }
-// }
-// run().catch(console.dir);
-
-app.get("/", (req, res) => {
-  res.send("Hello World!");
-});
-app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`);
-});
-
-
-
-
-
+run().catch(console.dir);
 
 module.exports = app;
