@@ -882,9 +882,16 @@ async function run() {
     });
 
     //Searching, Sorting, Filtering
-app.get("/api/public/properties", async (req, res) => {
+    app.get("/api/public/properties", async (req, res) => {
   try {
-    const { search, propertyType, sort } = req.query;
+    // Destructure query parameters including current page matrix indicators
+    const { search, propertyType, sort, minPrice, maxPrice, page = 1, limit = 10 } = req.query;
+    
+
+    const activePage = Math.max(1, parseInt(page));
+    const pageLimit = Math.max(1, parseInt(limit));
+    const skipOffset = (activePage - 1) * pageLimit;
+
     let queryFilter = { status: "Approved" };
 
     if (search && search !== "undefined" && search.trim() !== "") {
@@ -904,22 +911,67 @@ app.get("/api/public/properties", async (req, res) => {
       sortConfig.createdAt = -1;
     }
 
-    const properties = await propertiesCollection
+    let priceFilter = {};
+    if (minPrice && !isNaN(minPrice)) {
+      priceFilter.rent = { ...priceFilter.rent, $gte: Number(minPrice) };
+    }
+    if (maxPrice && !isNaN(maxPrice)) {
+      priceFilter.rent = { ...priceFilter.rent, $lte: Number(maxPrice) };
+    }
+
+  
+    const aggregationResult = await propertiesCollection
       .aggregate([
+
         { $match: queryFilter },
         {
           $addFields: {
-            rent: { $convert: { input: "$rent", to: "double", onError: 0, onNull: 0 } }
-          }
+            rent: {
+              $convert: {
+                input: "$rent",
+                to: "double",
+                onError: 0,
+                onNull: 0,
+              },
+            },
+          },
         },
-        { $sort: sortConfig }
+
+        ...(Object.keys(priceFilter).length > 0 ? [{ $match: priceFilter }] : []),
+
+        {
+          $facet: {
+            totalCount: [{ $count: "count" }],
+            paginatedData: [
+              { $sort: sortConfig },
+              { $skip: skipOffset },
+              { $limit: pageLimit }
+            ]
+          }
+        }
       ])
       .toArray();
 
-    res.json(properties);
+    const totalCount = aggregationResult[0]?.totalCount[0]?.count || 0;
+    const properties = aggregationResult[0]?.paginatedData || [];
+    const totalPages = Math.ceil(totalCount / pageLimit);
+
+    res.json({
+      success: true,
+      data: properties,
+      meta: {
+        totalItems: totalCount,
+        totalPages: totalPages,
+        currentPage: activePage,
+        itemsPerPage: pageLimit
+      }
+    });
   } catch (error) {
-    console.error("Public sorting fallback crash:", error);
-    res.status(500).json({ error: "Failed to compile accurately ordered property matrices." });
+    console.error("Public sorting pagination fallback crash:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to accurately compile paginated property grids."
+    });
   }
 });
 
