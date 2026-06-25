@@ -80,9 +80,10 @@ const adminVerify = async (req, res, next) => {
   next();
 };
 
-async function run() {
-  try {
-    await client.connect();
+// async function run() {
+//   try {
+//     await 
+client.connect().catch(console.dir)
     const db = client.db("nestFinder");
     const propertiesCollection = db.collection("properties");
     const bookingsCollection = db.collection("bookings");
@@ -975,14 +976,14 @@ async function run() {
   }
 });
 
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!",
-    );
-  } finally {
-    // Keep connection active
-  }
-}
-run().catch(console.dir);
+//     console.log(
+//       "Pinged your deployment. You successfully connected to MongoDB!",
+//     );
+//   } finally {
+//     // Keep connection active
+//   }
+// }
+// run().catch(console.dir);
 
 app.get("/", (req, res) => {
   res.send("Hello World!");
@@ -990,3 +991,10 @@ app.get("/", (req, res) => {
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
 });
+
+
+
+
+
+
+module.exports = app;
